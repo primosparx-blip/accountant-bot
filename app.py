@@ -401,6 +401,27 @@ def api_summary():
         return jsonify({"status":"error","message":str(e)})
 
 
+@app.route("/api/clearsheet", methods=["POST"])
+def api_clearsheet():
+    """Called by the assistant bot to clear all sheet data."""
+    try:
+        gc = get_gspread_client()
+        sh = gc.open_by_key(SHEET_ID)
+        for title, headers in [
+            ("Invoice Log", SHEET_HEADERS),
+            ("Category Summary", ["Category","Invoice Count","Subtotal","Tax","Total","% of Spend"]),
+            ("Monthly Summary", ["Month","Invoice Count","Subtotal","Tax","Total"])
+        ]:
+            try:
+                ws = sh.worksheet(title)
+                ws.clear()
+                ws.append_row(headers)
+            except:
+                pass
+        return jsonify({"status":"ok","message":"All sheets cleared"})
+    except Exception as e:
+        return jsonify({"status":"error","message":str(e)})
+
 @app.route("/api/invoices", methods=["GET"])
 def api_invoices():
     """Return full invoice list for the assistant to query."""
