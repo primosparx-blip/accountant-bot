@@ -76,7 +76,7 @@ def get_all_invoices():
     sh = gc.open_by_key(SHEET_ID)
     ws = get_or_create_sheet(sh, "Invoice Log", SHEET_HEADERS)
     records = ws.get_all_records()
-    return [r for r in records if r.get("ID","") != "ID" and r.get("ID","") != ""]
+    return [r for r in records if r.get("ID","") not in ("", "ID")]
 
 def append_to_sheet(data, source="telegram"):
     gc     = get_gspread_client()
@@ -104,13 +104,28 @@ def append_to_sheet(data, source="telegram"):
 
 def refresh_summaries(sh):
     rows = sh.worksheet("Invoice Log").get_all_records()
+    # Filter out any header-like or empty rows
+    rows = [r for r in rows if r.get("ID","") not in ("","ID") 
+            and str(r.get("Amount","")).replace(".","").replace("-","").isdigit() == False
+            or str(r.get("Amount","")) not in ("","Amount")]
+    rows = [r for r in rows if r.get("ID","") not in ("","ID")]
     if not rows:
         return
     cat_data = {}
     for r in rows:
         cat = r.get("Category","Other") or "Other"
-        amt = float(r.get("Amount",0) or 0)
-        tax = float(r.get("Tax",0) or 0)
+        try:
+            try:
+            amt = float(r.get("Amount",0) or 0)
+        except: amt = 0
+        except (ValueError, TypeError):
+            amt = 0
+        try:
+            try:
+            tax = float(r.get("Tax",0) or 0)
+        except: tax = 0
+        except (ValueError, TypeError):
+            tax = 0
         if cat not in cat_data:
             cat_data[cat] = {"count":0,"amount":0,"tax":0}
         cat_data[cat]["count"]  += 1
@@ -127,8 +142,12 @@ def refresh_summaries(sh):
     month_data = {}
     for r in rows:
         month = str(r.get("Invoice Date","") or r.get("Date Received",""))[:7]
-        amt = float(r.get("Amount",0) or 0)
-        tax = float(r.get("Tax",0) or 0)
+        try:
+            amt = float(r.get("Amount",0) or 0)
+        except: amt = 0
+        try:
+            tax = float(r.get("Tax",0) or 0)
+        except: tax = 0
         if month not in month_data:
             month_data[month] = {"count":0,"amount":0,"tax":0}
         month_data[month]["count"]  += 1
@@ -222,7 +241,9 @@ def send_weekly_email(rows):
     rows_html = ""
     for i,r in enumerate(weekly):
         bg  = "#F5F5FC" if i%2==0 else "#EAEAF5"
-        amt = float(r.get("Amount",0) or 0)+float(r.get("Tax",0) or 0)
+        try:
+            amt = float(r.get("Amount",0) or 0)
+        except: amt = 0+float(r.get("Tax",0) or 0)
         rows_html += (f'<tr style="background:{bg}"><td style="padding:8px">{r.get("Vendor","")}</td>'
                       f'<td style="padding:8px">{r.get("Category","")}</td>'
                       f'<td style="padding:8px">{r.get("Date Received","")}</td>'
