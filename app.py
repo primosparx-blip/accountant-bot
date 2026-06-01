@@ -264,6 +264,60 @@ def weekly_scheduler():
             time.sleep(360)
         time.sleep(60)
 
+def cost_recipe_with_claude(recipe_text, invoices):
+    """Use Claude to match recipe ingredients to invoice prices and calculate cost."""
+    inv_summary = []
+    for inv in invoices:
+        inv_summary.append(
+            str(inv.get("Vendor","")) + " | " +
+            str(inv.get("Description","")) + " | " +
+            "TTD " + str(inv.get("Amount",0)) + " | " +
+            str(inv.get("Invoice Date",""))
+        )
+    inv_text = " | ".join(inv_summary) if inv_summary else "No invoices available"
+
+    prompt = (
+        "You are a restaurant cost analyst. "
+        "Here is a recipe: " + recipe_text +
+        " Supplier invoices: " + inv_text +
+        " Calculate cost per dish. For each ingredient: "
+        "1) Match it to the closest invoice item "
+        "2) Estimate the portion used for one dish "
+        "3) Calculate the cost of that portion "
+        "If no invoice match exists, estimate a reasonable market price for Trinidad. "
+        "Return a clear breakdown: "
+        "INGREDIENT | PORTION | UNIT COST | PORTION COST. "
+        "Then show total ingredient cost per dish, "
+        "Recommended selling price at 30 percent food cost, "
+        "Gross profit at that price. "
+        "Use TTD currency throughout."
+    )
+    resp = claude.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return resp.content[0].text
+
+def extract_recipe_from_image(image_b64, media_type="image/jpeg"):
+    """Use Claude Vision to read a recipe or ingredient list from a photo."""
+    prompt = (
+        "Read this recipe or ingredient list image. "
+        "Extract all ingredients with their quantities. "
+        "Format as a clean list: INGREDIENT - QUANTITY. "
+        "Also note the dish name if visible."
+    )
+    resp = claude.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=300,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
+            {"type": "text", "text": prompt}
+        ]}]
+    )
+    return resp.content[0].text
+
+
 def send_message(chat_id, text, parse_mode="Markdown"):
     requests.post(f"{TELEGRAM_API}/sendMessage",
                   json={"chat_id":chat_id,"text":text,"parse_mode":parse_mode})
@@ -304,12 +358,26 @@ def telegram_webhook():
         return "ok"
 
     if photo or (document and document.get("mime_type","").startswith("image")):
-        send_message(chat_id, "📸 Got it! Reading your invoice...")
+        # Check if user said it's a recipe
+        caption = msg.get("caption","").lower()
+        is_recipe = any(w in caption for w in ["recipe","cost","ingredients","dish","menu","how much to make"])
+        if is_recipe:
+            send_message(chat_id, "Reading your recipe...")
+        else:
+            send_message(chat_id, "Got it! Reading your invoice...")
         try:
             file_id   = photo[-1]["file_id"] if photo else document["file_id"]
             file_url  = get_file_url(file_id)
             img_data  = requests.get(file_url).content
             image_b64 = base64.standard_b64encode(img_data).decode("utf-8")
+            if is_recipe:
+                recipe_text = extract_recipe_from_image(image_b64)
+                invoices    = get_all_invoices()
+                result      = cost_recipe_with_claude(recipe_text, invoices)
+                send_message(chat_id, "Recipe extracted: " + recipe_text)
+                send_message(chat_id, result)
+                return "ok"
+
             data      = extract_invoice(image_b64)
             inv_id    = append_to_sheet(data, "telegram")
             conf_emoji = {"high":"✅","medium":"⚠️","low":"🔴"}.get(data.get("confidence","?"),"❓")
