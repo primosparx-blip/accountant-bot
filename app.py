@@ -1,7 +1,5 @@
 """
-PrimoAccountantBot — Telegram Accounting Agent
-Handles invoice photos, expense tracking, Google Sheets, weekly email reports
-Can be queried by the Personal Assistant orchestrator via /api/* endpoints
+PrimoAccountingBot — Telegram Accounting Agent
 """
 import os, json, base64, datetime, requests, traceback, threading, time
 from flask import Flask, request, jsonify
@@ -14,7 +12,6 @@ from sendgrid.helpers.mail import Mail
 
 app = Flask(__name__)
 
-# ── Config ─────────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN    = os.environ["ACCOUNTING_BOT_TOKEN"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 SHEET_ID          = os.environ.get("SHEET_ID", "1mity1H5znYDITK9QLYORYD-UGt689LmY-fS29m13VLE")
@@ -46,7 +43,12 @@ If a numeric field cannot be read use 0. If text cannot be read use Unknown.
 SHEET_HEADERS = ["ID","Date Received","Invoice Date","Invoice #","Vendor",
                  "Description","Category","Currency","Amount","Tax","Total","Status","Source"]
 
-# ── Google Sheets ───────────────────────────────────────────────────────────
+def safe_float(val):
+    try:
+        return float(val or 0)
+    except (ValueError, TypeError):
+        return 0.0
+
 def get_gspread_client():
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/gmail.modify",
@@ -72,9 +74,9 @@ def get_or_create_sheet(sh, title, headers):
     return ws
 
 def get_all_invoices():
-    gc = get_gspread_client()
-    sh = gc.open_by_key(SHEET_ID)
-    ws = get_or_create_sheet(sh, "Invoice Log", SHEET_HEADERS)
+    gc      = get_gspread_client()
+    sh      = gc.open_by_key(SHEET_ID)
+    ws      = get_or_create_sheet(sh, "Invoice Log", SHEET_HEADERS)
     records = ws.get_all_records()
     return [r for r in records if r.get("ID","") not in ("", "ID")]
 
@@ -85,8 +87,8 @@ def append_to_sheet(data, source="telegram"):
     rows   = ws.get_all_values()
     inv_id = f"INV-{len(rows):03d}"
     today  = datetime.date.today().strftime("%Y-%m-%d")
-    amount = float(data.get("amount", 0))
-    tax    = float(data.get("tax", 0))
+    amount = safe_float(data.get("amount", 0))
+    tax    = safe_float(data.get("tax", 0))
     ws.append_row([
         inv_id, today,
         data.get("invoice_date", today),
@@ -103,64 +105,51 @@ def append_to_sheet(data, source="telegram"):
     return inv_id
 
 def refresh_summaries(sh):
-    rows = sh.worksheet("Invoice Log").get_all_records()
-    # Filter out any header-like or empty rows
-    rows = [r for r in rows if r.get("ID","") not in ("","ID") 
-            and str(r.get("Amount","")).replace(".","").replace("-","").isdigit() == False
-            or str(r.get("Amount","")) not in ("","Amount")]
-    rows = [r for r in rows if r.get("ID","") not in ("","ID")]
+    records = sh.worksheet("Invoice Log").get_all_records()
+    rows    = [r for r in records if r.get("ID","") not in ("","ID")]
     if not rows:
         return
+
     cat_data = {}
     for r in rows:
         cat = r.get("Category","Other") or "Other"
-        try:
-            try:
-            amt = float(r.get("Amount",0) or 0)
-        except: amt = 0
-        except (ValueError, TypeError):
-            amt = 0
-        try:
-            try:
-            tax = float(r.get("Tax",0) or 0)
-        except: tax = 0
-        except (ValueError, TypeError):
-            tax = 0
+        amt = safe_float(r.get("Amount", 0))
+        tax = safe_float(r.get("Tax", 0))
         if cat not in cat_data:
             cat_data[cat] = {"count":0,"amount":0,"tax":0}
         cat_data[cat]["count"]  += 1
         cat_data[cat]["amount"] += amt
         cat_data[cat]["tax"]    += tax
+
     total_spend = sum(v["amount"] for v in cat_data.values()) or 1
     cat_headers = ["Category","Invoice Count","Subtotal","Tax","Total","% of Spend"]
     ws_cat = get_or_create_sheet(sh, "Category Summary", cat_headers)
-    ws_cat.clear(); ws_cat.append_row(cat_headers)
+    ws_cat.clear()
+    ws_cat.append_row(cat_headers)
     for cat, v in sorted(cat_data.items(), key=lambda x: -x[1]["amount"]):
-        pct = round((v["amount"]/total_spend)*100,1)
-        ws_cat.append_row([cat,v["count"],round(v["amount"],2),
-                           round(v["tax"],2),round(v["amount"]+v["tax"],2),f"{pct}%"])
+        pct = round((v["amount"] / total_spend) * 100, 1)
+        ws_cat.append_row([cat, v["count"], round(v["amount"],2),
+                           round(v["tax"],2), round(v["amount"]+v["tax"],2), f"{pct}%"])
+
     month_data = {}
     for r in rows:
         month = str(r.get("Invoice Date","") or r.get("Date Received",""))[:7]
-        try:
-            amt = float(r.get("Amount",0) or 0)
-        except: amt = 0
-        try:
-            tax = float(r.get("Tax",0) or 0)
-        except: tax = 0
+        amt = safe_float(r.get("Amount", 0))
+        tax = safe_float(r.get("Tax", 0))
         if month not in month_data:
             month_data[month] = {"count":0,"amount":0,"tax":0}
         month_data[month]["count"]  += 1
         month_data[month]["amount"] += amt
         month_data[month]["tax"]    += tax
+
     month_headers = ["Month","Invoice Count","Subtotal","Tax","Total"]
     ws_m = get_or_create_sheet(sh, "Monthly Summary", month_headers)
-    ws_m.clear(); ws_m.append_row(month_headers)
+    ws_m.clear()
+    ws_m.append_row(month_headers)
     for month, v in sorted(month_data.items()):
-        ws_m.append_row([month,v["count"],round(v["amount"],2),
-                         round(v["tax"],2),round(v["amount"]+v["tax"],2)])
+        ws_m.append_row([month, v["count"], round(v["amount"],2),
+                         round(v["tax"],2), round(v["amount"]+v["tax"],2)])
 
-# ── Summary helpers ─────────────────────────────────────────────────────────
 def get_weekly_rows(rows):
     today    = datetime.date.today()
     week_ago = today - datetime.timedelta(days=7)
@@ -181,75 +170,47 @@ def get_monthly_rows(rows):
 def build_summary(rows, label="All Time"):
     if not rows:
         return f"No invoices for {label}."
-    total_amt = sum(float(r.get("Amount",0) or 0) for r in rows)
-    total_tax = sum(float(r.get("Tax",0) or 0) for r in rows)
+    total_amt = sum(safe_float(r.get("Amount",0)) for r in rows)
+    total_tax = sum(safe_float(r.get("Tax",0)) for r in rows)
     cat_totals = {}
     for r in rows:
         cat = r.get("Category","Other") or "Other"
-        cat_totals[cat] = cat_totals.get(cat,0)+float(r.get("Amount",0) or 0)
-    top = sorted(cat_totals.items(), key=lambda x:-x[1])[:5]
+        cat_totals[cat] = cat_totals.get(cat,0) + safe_float(r.get("Amount",0))
+    top = sorted(cat_totals.items(), key=lambda x: -x[1])[:5]
     lines = [
         f"📊 *{label} Summary*",
         f"📋 Invoices: {len(rows)}",
         f"💵 Subtotal: ${total_amt:,.2f}",
         f"🧾 Tax: ${total_tax:,.2f}",
-        f"💰 Total: ${total_amt+total_tax:,.2f}","",
+        f"💰 Total: ${total_amt+total_tax:,.2f}",
+        "",
         "📂 *Top Categories:*"
     ]
-    for cat,amt in top:
+    for cat, amt in top:
         lines.append(f"  • {cat}: ${amt:,.2f}")
     return "\n".join(lines)
 
-# ── Telegram helpers ────────────────────────────────────────────────────────
-def send_message(chat_id, text, parse_mode="Markdown"):
-    requests.post(f"{TELEGRAM_API}/sendMessage",
-                  json={"chat_id":chat_id,"text":text,"parse_mode":parse_mode})
-
-def get_file_url(file_id):
-    r = requests.get(f"{TELEGRAM_API}/getFile", params={"file_id":file_id})
-    path = r.json()["result"]["file_path"]
-    return f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}"
-
-# ── Invoice extraction ──────────────────────────────────────────────────────
-def extract_invoice(image_b64, media_type="image/jpeg"):
-    message = claude.messages.create(
-        model="claude-sonnet-4-5",
-        max_tokens=512,
-        messages=[{"role":"user","content":[
-            {"type":"image","source":{"type":"base64","media_type":media_type,"data":image_b64}},
-            {"type":"text","text":EXTRACT_PROMPT}
-        ]}]
-    )
-    raw = message.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"): raw = raw[4:]
-    return json.loads(raw)
-
-# ── Email report ────────────────────────────────────────────────────────────
 def send_weekly_email(rows):
     if not SENDGRID_API_KEY:
-        return "SendGrid not configured"
+        return "not configured"
     weekly      = get_weekly_rows(rows)
     monthly     = get_monthly_rows(rows)
-    week_total  = sum(float(r.get("Amount",0) or 0)+float(r.get("Tax",0) or 0) for r in weekly)
-    month_total = sum(float(r.get("Amount",0) or 0)+float(r.get("Tax",0) or 0) for r in monthly)
+    week_total  = sum(safe_float(r.get("Amount",0))+safe_float(r.get("Tax",0)) for r in weekly)
+    month_total = sum(safe_float(r.get("Amount",0))+safe_float(r.get("Tax",0)) for r in monthly)
     cat_totals  = {}
     for r in rows:
         cat = r.get("Category","Other") or "Other"
-        cat_totals[cat] = cat_totals.get(cat,0)+float(r.get("Amount",0) or 0)
+        cat_totals[cat] = cat_totals.get(cat,0) + safe_float(r.get("Amount",0))
     rows_html = ""
-    for i,r in enumerate(weekly):
+    for i, r in enumerate(weekly):
         bg  = "#F5F5FC" if i%2==0 else "#EAEAF5"
-        try:
-            amt = float(r.get("Amount",0) or 0)
-        except: amt = 0+float(r.get("Tax",0) or 0)
+        amt = safe_float(r.get("Amount",0)) + safe_float(r.get("Tax",0))
         rows_html += (f'<tr style="background:{bg}"><td style="padding:8px">{r.get("Vendor","")}</td>'
                       f'<td style="padding:8px">{r.get("Category","")}</td>'
                       f'<td style="padding:8px">{r.get("Date Received","")}</td>'
                       f'<td style="padding:8px">${amt:,.2f}</td></tr>')
     cat_rows = ""
-    for cat,amt in sorted(cat_totals.items(),key=lambda x:-x[1]):
+    for cat, amt in sorted(cat_totals.items(), key=lambda x: -x[1]):
         cat_rows += f'<tr><td style="padding:6px">{cat}</td><td style="padding:6px">${amt:,.2f}</td></tr>'
     html = f"""
     <html><body style="font-family:Arial,sans-serif;max-width:620px;margin:auto;padding:20px">
@@ -260,8 +221,10 @@ def send_weekly_email(rows):
     <h3>This Week ({len(weekly)} invoices)</h3>
     <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd">
     <tr style="background:#1A1A3E;color:white">
-      <th style="padding:10px;text-align:left">Vendor</th><th style="padding:10px;text-align:left">Category</th>
-      <th style="padding:10px;text-align:left">Date</th><th style="padding:10px;text-align:left">Total</th>
+      <th style="padding:10px;text-align:left">Vendor</th>
+      <th style="padding:10px;text-align:left">Category</th>
+      <th style="padding:10px;text-align:left">Date</th>
+      <th style="padding:10px;text-align:left">Total</th>
     </tr>{rows_html}</table>
     <p><strong>Week Total: ${week_total:,.2f}</strong></p>
     <hr><h3>Month to Date</h3>
@@ -269,9 +232,10 @@ def send_weekly_email(rows):
     <hr><h3>All Time by Category</h3>
     <table width="60%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid #ddd">
     <tr style="background:#1A1A3E;color:white">
-      <th style="padding:8px;text-align:left">Category</th><th style="padding:8px;text-align:left">Total</th>
+      <th style="padding:8px;text-align:left">Category</th>
+      <th style="padding:8px;text-align:left">Total</th>
     </tr>{cat_rows}</table>
-    <hr><p style="color:#aaa;font-size:12px">Sent every Monday 8am · PrimoAccountantBot</p>
+    <hr><p style="color:#aaa;font-size:12px">Sent every Monday 8am · PrimoAccountingBot</p>
     </body></html>"""
     message = Mail(from_email=SENDGRID_FROM, to_emails=REPORT_EMAIL,
                    subject=f"📊 Weekly Accounting Report — {datetime.date.today().strftime('%b %d, %Y')}",
@@ -291,14 +255,36 @@ def weekly_scheduler():
             time.sleep(360)
         time.sleep(60)
 
-# ── Telegram webhook ────────────────────────────────────────────────────────
+def send_message(chat_id, text, parse_mode="Markdown"):
+    requests.post(f"{TELEGRAM_API}/sendMessage",
+                  json={"chat_id":chat_id,"text":text,"parse_mode":parse_mode})
+
+def get_file_url(file_id):
+    r    = requests.get(f"{TELEGRAM_API}/getFile", params={"file_id":file_id})
+    path = r.json()["result"]["file_path"]
+    return f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{path}"
+
+def extract_invoice(image_b64, media_type="image/jpeg"):
+    message = claude.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=512,
+        messages=[{"role":"user","content":[
+            {"type":"image","source":{"type":"base64","media_type":media_type,"data":image_b64}},
+            {"type":"text","text":EXTRACT_PROMPT}
+        ]}]
+    )
+    raw = message.content[0].text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return json.loads(raw)
+
 @app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    update = request.json
+    update   = request.json
     if not update:
         return "ok"
-
-    # Handle message
     msg      = update.get("message", {})
     chat_id  = msg.get("chat", {}).get("id")
     text     = msg.get("text", "").strip().lower()
@@ -308,19 +294,18 @@ def telegram_webhook():
     if not chat_id:
         return "ok"
 
-    # ── Photo received ────────────────────────────────────────────────────
     if photo or (document and document.get("mime_type","").startswith("image")):
         send_message(chat_id, "📸 Got it! Reading your invoice...")
         try:
-            file_id  = photo[-1]["file_id"] if photo else document["file_id"]
-            file_url = get_file_url(file_id)
-            img_data = requests.get(file_url).content
+            file_id   = photo[-1]["file_id"] if photo else document["file_id"]
+            file_url  = get_file_url(file_id)
+            img_data  = requests.get(file_url).content
             image_b64 = base64.standard_b64encode(img_data).decode("utf-8")
-            data   = extract_invoice(image_b64)
-            inv_id = append_to_sheet(data, "telegram")
+            data      = extract_invoice(image_b64)
+            inv_id    = append_to_sheet(data, "telegram")
             conf_emoji = {"high":"✅","medium":"⚠️","low":"🔴"}.get(data.get("confidence","?"),"❓")
-            amount = float(data.get("amount",0))
-            tax    = float(data.get("tax",0))
+            amount = safe_float(data.get("amount",0))
+            tax    = safe_float(data.get("tax",0))
             send_message(chat_id,
                 f"✅ *Invoice Logged!*\n\n"
                 f"🆔 ID: `{inv_id}`\n"
@@ -339,15 +324,14 @@ def telegram_webhook():
             send_message(chat_id, f"❌ Error processing invoice: {str(e)[:100]}")
         return "ok"
 
-    # ── Text commands ─────────────────────────────────────────────────────
     try:
         rows = get_all_invoices()
     except:
         rows = []
 
-    if text in ("/start", "start", "help"):
+    if text in ("/start","start","help","/help"):
         send_message(chat_id,
-            "👋 *PrimoAccountantBot*\n\n"
+            "👋 *PrimoAccountingBot*\n\n"
             "📸 Send a photo of any invoice or bill\n\n"
             "*Commands:*\n"
             "• /summary — all time totals\n"
@@ -356,48 +340,45 @@ def telegram_webhook():
             "• /categories — spend by category\n"
             "• /report — send email report now"
         )
-    elif text in ("/summary", "summary"):
+    elif text in ("/summary","summary"):
         send_message(chat_id, build_summary(rows, "All Time"))
-    elif text in ("/week", "week"):
+    elif text in ("/week","week"):
         send_message(chat_id, build_summary(get_weekly_rows(rows), "This Week"))
-    elif text in ("/month", "month"):
+    elif text in ("/month","month"):
         send_message(chat_id, build_summary(get_monthly_rows(rows), "This Month"))
-    elif text in ("/categories", "categories"):
+    elif text in ("/categories","categories"):
         cat_totals = {}
         for r in rows:
             cat = r.get("Category","Other") or "Other"
-            cat_totals[cat] = cat_totals.get(cat,0)+float(r.get("Amount",0) or 0)
+            cat_totals[cat] = cat_totals.get(cat,0) + safe_float(r.get("Amount",0))
         lines = ["📂 *Spend by Category*\n"]
-        for cat,amt in sorted(cat_totals.items(),key=lambda x:-x[1]):
+        for cat, amt in sorted(cat_totals.items(), key=lambda x: -x[1]):
             lines.append(f"• {cat}: ${amt:,.2f}")
         send_message(chat_id, "\n".join(lines))
-    elif text in ("/report", "report"):
+    elif text in ("/report","report"):
         send_message(chat_id, "📧 Sending email report...")
         result = send_weekly_email(rows)
         send_message(chat_id, f"✅ Report sent to {REPORT_EMAIL}!" if result=="sent" else "❌ Email not configured")
     else:
-        send_message(chat_id,
-            "📸 Send a photo of a bill, or use:\n"
-            "/summary /week /month /categories /report"
-        )
+        send_message(chat_id, "📸 Send a photo of a bill, or use:\n/summary /week /month /categories /report")
+
     return "ok"
 
-# ── Internal API for Personal Assistant orchestrator ────────────────────────
 @app.route("/api/summary", methods=["GET"])
 def api_summary():
     try:
         rows        = get_all_invoices()
         weekly      = get_weekly_rows(rows)
         monthly     = get_monthly_rows(rows)
-        total_all   = sum(float(r.get("Amount",0) or 0)+float(r.get("Tax",0) or 0) for r in rows)
-        total_week  = sum(float(r.get("Amount",0) or 0)+float(r.get("Tax",0) or 0) for r in weekly)
-        total_month = sum(float(r.get("Amount",0) or 0)+float(r.get("Tax",0) or 0) for r in monthly)
+        total_all   = sum(safe_float(r.get("Amount",0))+safe_float(r.get("Tax",0)) for r in rows)
+        total_week  = sum(safe_float(r.get("Amount",0))+safe_float(r.get("Tax",0)) for r in weekly)
+        total_month = sum(safe_float(r.get("Amount",0))+safe_float(r.get("Tax",0)) for r in monthly)
         pending     = [r for r in rows if r.get("Status","") == "Pending"]
         cat_totals  = {}
         for r in rows:
             cat = r.get("Category","Other") or "Other"
-            cat_totals[cat] = cat_totals.get(cat,0)+float(r.get("Amount",0) or 0)
-        top_cats = sorted(cat_totals.items(),key=lambda x:-x[1])[:3]
+            cat_totals[cat] = cat_totals.get(cat,0) + safe_float(r.get("Amount",0))
+        top_cats = sorted(cat_totals.items(), key=lambda x: -x[1])[:3]
         return jsonify({
             "total_invoices": len(rows),
             "pending_invoices": len(pending),
@@ -412,11 +393,10 @@ def api_summary():
 
 @app.route("/", methods=["GET"])
 def health():
-    return {"status":"ok","bot":"PrimoAccountantBot","time":str(datetime.datetime.now())}
+    return {"status":"ok","bot":"PrimoAccountingBot","time":str(datetime.datetime.now())}
 
-# ── Start scheduler ─────────────────────────────────────────────────────────
 threading.Thread(target=weekly_scheduler, daemon=True).start()
 
 if __name__ == "__main__":
-    print("PrimoAccountantBot starting on http://localhost:5001")
+    print("PrimoAccountingBot starting on http://localhost:5001")
     app.run(host="0.0.0.0", port=5001, debug=False)
