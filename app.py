@@ -95,7 +95,7 @@ def append_to_sheet(data, source="telegram"):
     ws     = get_or_create_sheet(sh, "Invoice Log", SHEET_HEADERS)
     rows   = ws.get_all_values()
     inv_id = f"INV-{len(rows):03d}"
-    today  = datetime.date.today().strftime("%Y-%m-%d")
+    today  = (datetime.datetime.utcnow() - datetime.timedelta(hours=4)).strftime("%Y-%m-%d")  # UTC-4 Trinidad
     amount = safe_float(data.get("amount", 0))
     tax    = safe_float(data.get("tax", 0))
     ws.append_row([
