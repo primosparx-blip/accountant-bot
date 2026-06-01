@@ -32,6 +32,15 @@ Return ONLY valid JSON — no markdown, no explanation.
   "invoice_number": "Invoice reference number or N/A",
   "description":    "Brief description (max 40 chars)",
   "category":       "One of: Office Supplies | Software/Cloud | Shipping | Facilities | Marketing | Travel | Utilities | Professional Services | Food & Entertainment | Other",
+  
+Category rules:
+- Food & Entertainment: ANY food, beverages, ingredients, flour, meat, seafood, produce, restaurant bills, takeout, cooking supplies
+- Office Supplies: stationery, paper, pens, printer items, desk items ONLY
+- Facilities: cleaning, maintenance, rent, security
+- Software/Cloud: apps, subscriptions, hosting
+- Travel: flights, hotels, transport
+- Utilities: electricity, water, internet, phone
+- Professional Services: legal, accounting, consulting
   "currency":       "USD",
   "amount":         123.45,
   "tax":            12.34,
