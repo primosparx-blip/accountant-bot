@@ -75,7 +75,8 @@ def get_all_invoices():
     gc = get_gspread_client()
     sh = gc.open_by_key(SHEET_ID)
     ws = get_or_create_sheet(sh, "Invoice Log", SHEET_HEADERS)
-    return ws.get_all_records()
+    records = ws.get_all_records()
+    return [r for r in records if r.get("ID","") != "ID" and r.get("ID","") != ""]
 
 def append_to_sheet(data, source="telegram"):
     gc     = get_gspread_client()
