@@ -313,9 +313,9 @@ def telegram_webhook():
                 f"📅 Date: {data.get('invoice_date','N/A')}\n"
                 f"🔢 Invoice \\#: {data.get('invoice_number','N/A')}\n"
                 f"📦 Category: {data.get('category','Other')}\n"
-                f"💵 Amount: {data.get('currency','USD')} {amount:,.2f}\n"
-                f"🧾 Tax: {data.get('currency','USD')} {tax:,.2f}\n"
-                f"💰 Total: {data.get('currency','USD')} {amount+tax:,.2f}\n\n"
+                f"💵 Amount: {data.get('currency','TTD')} {amount:,.2f}\n"
+                f"🧾 Tax: {data.get('currency','TTD')} {tax:,.2f}\n"
+                f"💰 Total: {data.get('currency','TTD')} {amount+tax:,.2f}\n\n"
                 f"{conf_emoji} Confidence: {data.get('confidence','?')}\n"
                 f"📊 Google Sheet updated!"
             )
