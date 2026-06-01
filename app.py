@@ -108,7 +108,7 @@ def append_to_sheet(data, source="telegram"):
         data.get("currency", "USD"),
         amount, tax,
         round(amount + tax, 2),
-        "Pending", source
+        "Paid", source
     ])
     refresh_summaries(sh)
     return inv_id
