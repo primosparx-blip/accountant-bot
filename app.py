@@ -391,6 +391,22 @@ def api_summary():
     except Exception as e:
         return jsonify({"status":"error","message":str(e)})
 
+
+@app.route("/api/invoices", methods=["GET"])
+def api_invoices():
+    """Return full invoice list for the assistant to query."""
+    try:
+        rows  = get_all_invoices()
+        limit = int(request.args.get("limit", 50))
+        rows  = rows[-limit:]
+        return jsonify({
+            "invoices": rows,
+            "total": len(rows),
+            "status": "ok"
+        })
+    except Exception as e:
+        return jsonify({"status":"error","message":str(e)})
+
 @app.route("/", methods=["GET"])
 def health():
     return {"status":"ok","bot":"PrimoAccountingBot","time":str(datetime.datetime.now())}
