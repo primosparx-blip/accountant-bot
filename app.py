@@ -469,6 +469,18 @@ def api_summary():
         return jsonify({"status":"error","message":str(e)})
 
 
+@app.route("/api/log_invoice", methods=["POST"])
+def api_log_invoice():
+    """Called by assistant bot to log an invoice extracted from email."""
+    try:
+        body   = request.json
+        data   = body.get("data", {})
+        source = body.get("source", "email_scan")
+        inv_id = append_to_sheet(data, source)
+        return jsonify({"status": "ok", "inv_id": inv_id})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
 @app.route("/api/clearsheet", methods=["POST"])
 def api_clearsheet():
     """Called by the assistant bot to clear all sheet data."""
